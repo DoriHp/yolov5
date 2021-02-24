@@ -2,6 +2,7 @@ import argparse
 import time
 from pathlib import Path
 
+import os
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
@@ -14,8 +15,75 @@ from utils.general import check_img_size, check_requirements, check_imshow, non_
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
+# Retrieve native display resolution
+from win32api import GetSystemMetrics
 
-def detect(save_img=False):
+# Convert values in 
+def convert2rect(image, bbox):
+    # Format: xmin, ymin, xmax, ymax
+    height, width, _ = image.shape
+    cen_x, cen_y, w, h = [float(i) for i in bbox]
+
+    # Re calculate bbox according to real image size 
+    cen_x *= width 
+    cen_y *= height
+    w     *= width
+    h     *= height
+
+    xmin = max(int(cen_x - w / 2), 0)
+    ymin = max(int(cen_y - h / 2), 0)
+    xmax = min(int(cen_x + w / 2), width)
+    ymax = min(int(cen_y + h / 2), height)
+
+    return xmin, ymin, xmax, ymax
+
+# Gen submission for X-ray competition
+def gen_submission(root_folder):
+
+    # image_folder = str(Path(label_folder).parents[0])
+    image_folder = root_folder
+    # Open all files in label folder and convert to relative values
+
+    label_folder = root_folder + "/labels"
+    label_list = [f for f in os.listdir(label_folder)]
+
+    image_list = [f for f in os.listdir(image_folder) if os.path.isfile(os.path.join(image_folder, f)) and f.endswith(".jpg")]
+
+    with open("submission.csv", "a+") as f:
+        f.write("image_id,PredictionString")
+        for image_name in image_list:
+            if image_name.replace(".jpg", ".txt") not in label_list:
+                write_string = image_name.replace(".jpg", "") + ",14 1 0 0 1 1 "
+
+                f.seek(0)
+                data = f.read(100)
+                if len(data) > 0:
+                    f.write("\n")        
+
+                f.write(write_string)
+
+
+        for file in label_list:
+            image_name = file.replace(".txt", ".jpg")
+            img = cv2.imread(os.path.join(image_folder, image_name))
+
+            write_string = image_name.replace(".jpg", "") + ","
+            with open(os.path.join(label_folder, file), "r") as _f:
+                lines =  _f.readlines()
+                for line in lines:
+                    class_id, cen_x, cen_y, obj_width, obj_height, conf = line.strip().split()
+                    xmin, ymin, xmax, ymax = convert2rect(img, (cen_x, cen_y, obj_width, obj_height))
+                    write_string += "%s %.1f %d %d %d %d " %(class_id, float(conf), xmin, ymin, xmax, ymax)
+            
+            f.seek(0)    
+            data = f.read(100)
+            if len(data) > 0:
+                f.write("\n")        
+
+            f.write(write_string)
+        
+
+def detect(save_img=False, save_csv=False):
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
         ('rtsp://', 'rtmp://', 'http://'))
@@ -117,8 +185,16 @@ def detect(save_img=False):
 
             # Stream results
             if view_img:
-                cv2.imshow(str(p), im0)
-                cv2.waitKey(1)  # 1 millisecond
+
+                display_img = im0.copy()
+                # If any demension of this image is higher than monitor's corresponding, resize if before displaying
+                if im0.shape[1] > GetSystemMetrics(0) or im0.shape[0] > GetSystemMetrics(1):
+                    display_img = cv2.resize(display_img, (GetSystemMetrics(0), GetSystemMetrics(1)))
+
+                cv2.imshow(str(p), display_img)
+                cv2.waitKey(0)  # 1 millisecond
+
+                cv2.destroyAllWindows()
 
             # Save results (image with detections)
             if save_img:
@@ -141,6 +217,9 @@ def detect(save_img=False):
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         print(f"Results saved to {save_dir}{s}")
 
+    if save_csv:
+        gen_submission(save_dir)
+
     print(f'Done. ({time.time() - t0:.3f}s)')
 
 
@@ -153,6 +232,7 @@ if __name__ == '__main__':
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--view-img', action='store_true', help='display results')
+    parser.add_argument('--save-img', action='store_true', help='save result images')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
@@ -172,4 +252,4 @@ if __name__ == '__main__':
                 detect()
                 strip_optimizer(opt.weights)
         else:
-            detect()
+            detect(opt.save_img, save_csv=True)
