@@ -13,6 +13,7 @@ from utils.general import make_divisible, check_file, set_logging
 from utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
     select_device, copy_attr
 
+from torchsummary import summary
 try:
     import thop  # for FLOPS computation
 except ImportError:
@@ -97,7 +98,7 @@ class Model(nn.Module):
 
         # Init weights, biases
         initialize_weights(self)
-        self.info()
+        # self.info()
         logger.info('')
 
     def forward(self, x, augment=False, profile=False):
@@ -197,7 +198,7 @@ class Model(nn.Module):
 
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
-    logger.info('\n%3s%18s%3s%10s  %-40s%-30s' % ('', 'from', 'n', 'params', 'module', 'arguments'))
+    # logger.info('\n%3s%18s%3s%10s  %-40s%-30s' % ('', 'from', 'n', 'params', 'module', 'arguments'))
     anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
@@ -241,14 +242,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         t = str(m)[8:-2].replace('__main__.', '')  # module type
         np = sum([x.numel() for x in m_.parameters()])  # number params
         m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
-        logger.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n, np, t, args))  # print
+        # logger.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n, np, t, args))  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:
             ch = []
         ch.append(c2)
     return nn.Sequential(*layers), sorted(save)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -260,8 +260,22 @@ if __name__ == '__main__':
     device = select_device(opt.device)
 
     # Create model
-    model = Model(opt.cfg).to(device)
-    model.train()
+    # model = Model(opt.cfg).to(device)
+    model = torch.hub.load('ultralytics/yolov5', "yolov5s", pretrained=True, autoshape=False)
+    # model.to('cuda')
+
+    model.model = model.model[:8]
+    m = model.model[-1]  # last layer
+    ch = m.conv.in_channels if hasattr(m, 'conv') else sum([x.in_channels for x in m.m])  # ch into module
+    c = Classify(ch, 14)  # Classify()
+    c.i, c.f, c.type = m.i, m.f, 'models.common.Classify'  # index, from, type
+    model.model[-1] = c  # replace
+
+    # model.eval()
+    model.cuda()
+    summary(model, (3, 512, 512), batch_size=1, device='cuda')
+
+    # model.train()
 
     # Profile
     # img = torch.rand(8 if torch.cuda.is_available() else 1, 3, 640, 640).to(device)
