@@ -2,7 +2,7 @@
 # @Author: bao
 # @Date:   2021-03-08 08:40:46
 # @Last Modified by:   bao
-# @Last Modified time: 2021-03-09 14:27:26
+# @Last Modified time: 2021-03-10 10:11:55
 
 import argparse
 import logging
@@ -10,24 +10,25 @@ import os
 from pathlib import Path
 from typing import List
 import csv
+import pandas as pd 
+from copy import deepcopy
 
 import math
 import torch
 import torch.nn as nn
+from torch import distributed
+from torch.utils import data
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 import torchvision
-import torchvision.transforms as T
-from torch.utils import data
-from torch import distributed
 
 from torch.cuda import amp
 from tqdm import tqdm
 
-from models.common import Classify, MLClassify
+from models.common import MLClassify
 from utils.general import set_logging, check_file, increment_path
-from utils.torch_utils import model_info, select_device
+from utils.torch_utils import model_info, select_device, is_parallel
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,8 +36,8 @@ import cv2
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from torch.utils.tensorboard import SummaryWriter
-from torchsummary import summary
 from sklearn.metrics import roc_auc_score
+import sklearn.metrics as metrics
 
 # Settings
 logger = logging.getLogger(__name__)
@@ -107,8 +108,7 @@ class CheXpertDataSet(data.Dataset):
 		if self.transform is not None:
 			image = self.transform(image=image)
 			return image['image'], torch.FloatTensor(label)
-		else:
-			return image, torch.FloatTensor(label)
+		return image, torch.FloatTensor(label)
 
 	def __len__(self):
 		return len(self.image_paths)
@@ -180,7 +180,7 @@ class DenseNet121(nn.Module):
 		return x
 
 def train():
-	data, bs, epochs, nw = opt.data, opt.batch_size, opt.epochs, opt.workers
+	bs, epochs, nw = opt.batch_size, opt.epochs, opt.workers
 
 	# Dataloaders
 	trainloader = DatasetLoader(train=True, batch_size=bs, num_workers=nw)
@@ -206,21 +206,11 @@ def train():
 	c.i, c.f, c.type = m.i, m.f, 'models.common.Classify'  # index, from, type
 	model.model[-1] = c  # replace
 
-	x = torch.randn(1, 3, 320, 320).to(device)
-
-	# print(model)
+	# x = torch.randn(1, 3, 320, 320).to(device)
 
 	model_info(model)
 	model = model.to(device)
-	print(model, model(x))
-
-	# summary(model, (3, 320, 320))
-
-	# _model = DenseNet121(14).to(device)
-	# model_info(_model)
-	# _model.eval()
-
-	# print(_model(x))	
+	# print(model, model(x))
 
 	# Optimizer
 	lr0 = 0.0001 * bs  # intial lr
@@ -237,7 +227,17 @@ def train():
 	# Train
 	criterion = nn.BCEWithLogitsLoss(size_average = True)  # loss function
 	# scaler = amp.GradScaler(enabled=cuda)
+
+	# Directories
+	wdir = save_dir / 'weights'
+	wdir.mkdir(parents=True, exist_ok=True)  # make dir
+	last = wdir / 'last.pt'
+	best = wdir / 'best.pt'
+
+	writer = SummaryWriter(save_dir)
 	print(f"\n{'epoch':10s}{'gpu_mem':10s}{'train_loss':12s}{'val_loss':12s}{'accuracy':12s}")
+	max_auc = 0
+
 	for epoch in range(epochs):  # loop over the dataset multiple times
 		mloss = 0.  # mean loss
 		model.train()
@@ -263,9 +263,24 @@ def train():
 			mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
 			pbar.desc = f"{'%s/%s' % (epoch + 1, epochs):10s}{mem:10s}{mloss / (i + 1):<12.3g}"
 
+			writer.add_scalar("train/loss", mloss, epoch + 1)
 			# Test
 			if i == len(pbar) - 1:
-				test(model, testloader, names, criterion, pbar=pbar)  # test
+				val_loss, auc_all, auc_mean = test(model, testloader, names, criterion, pbar=pbar)  # test
+				writer.add_scalar("eval/loss", val_loss, epoch + 1)
+				writer.add_scalar("eval/auc", auc_mean, epoch + 1)
+				# print(auc_all)
+				for i in range(len(names)):
+					writer.add_scalar("eval/auc %s" %names[i], auc_all[i], epoch + 1)
+
+				ckpt = {'epoch': epoch,
+						'model': deepcopy(model.module if is_parallel(model) else model).half(),
+						'optimizer': optimizer.state_dict()}
+
+				if auc_mean > max_auc:
+					torch.save(ckpt['model'], best)
+
+				torch.save(ckpt, last)
 
 		# Test
 		scheduler.step()
@@ -277,31 +292,57 @@ def train():
 	# print('GroundTruth: ', ' '.join('%5s' % names[labels[j]] for j in range(4)))
 	# print('Predicted: ', ' '.join('%5s' % names[predicted[j]] for j in range(4)))
 
-def computeAUROC (dataGT, dataPRED, classCount):
+
+def compute_auc(gt, pred, names):
 	
-	outAUROC = []
+	output = []
 	
-	datanpGT = dataGT.cpu().numpy()
-	datanpPRED = dataPRED.cpu().numpy()
+	gt_np = gt.cpu().numpy()
+	pred_np = pred.cpu().numpy()
 	
-	for i in range(classCount):
+	draw_auc(gt, pred, names)
+	for i in range(len(names)):
 		try:
-			outAUROC.append(roc_auc_score(datanpGT[:, i], datanpPRED[:, i]))
+			output.append(roc_auc_score(gt_np[:, i], pred_np[:, i]))
 		except ValueError:
+			output.append(1)
 			pass
-	return outAUROC
+	return output
 
-def test(model, dataloader, names, criterion=None, verbose=True, pbar=None, use_gpu=True):
+def draw_auc(gt, pred, names):
+	"""
+		Args:
+		- names: list of class name(s)
+		- gt: ground truth value
+		- pred: predictions from model
+		- save_dir: where to save the figure
+	"""
+	fig = plt.figure(figsize=(30, 10))
+	for i in range(len(names)):
+		fpr, tpr, _ = metrics.roc_curve(gt.cpu()[:,i], pred.cpu()[:,i])
+		roc_auc = metrics.auc(fpr, tpr)
+		f = plt.subplot(2, 7, i+1)
 
-	if use_gpu:
-		outGT = torch.FloatTensor().cuda()
-		outPRED = torch.FloatTensor().cuda()
-	else:
-		outGT = torch.FloatTensor()
-		outPRED = torch.FloatTensor()
+		plt.plot(fpr, tpr, label = 'AUC = %0.2f' % roc_auc)
+		f.set_aspect('equal')
+
+		plt.title(names[i], fontsize = 14.0)
+		plt.legend(loc = 'lower right')
+		plt.xlim([0, 1])
+		plt.ylim([0, 1])
+		plt.ylabel('FPR', fontsize = 14.0)
+		plt.xlabel('TPR', fontsize = 14.0)
+
+	fig.tight_layout()
+	plt.savefig((save_dir / "roc.png"), dpi=1000, bbox_inches='tight')
+
+def test(model, dataloader, names, criterion=None, verbose=True, pbar=None):
+
+	gt = torch.FloatTensor().to(device)
+	pred = torch.FloatTensor().to(device)
 
 	model.eval()
-	pred, targets, loss = [], [], 0
+	loss = 0
 	with torch.no_grad():
 		for images, labels in dataloader:
 			images, labels = images.to(device), labels.to(device)
@@ -309,25 +350,25 @@ def test(model, dataloader, names, criterion=None, verbose=True, pbar=None, use_
 			y = model(images)
 				
 			# used for compute AUC
-			outPRED = torch.cat((outPRED, y), 0)
-			outGT = torch.cat((outGT, labels), 0).to(device)
+			pred = torch.cat((pred, y), 0)
 
-			targets.append(labels)
 			if criterion:
 				loss += criterion(y, labels)
 				# print(loss)
+			gt = torch.cat((gt, labels), 0).to(device)
 
-	aurocIndividual = computeAUROC(outGT, outPRED, len(names))
+	aurocIndividual = compute_auc(gt, pred, names)
 	aurocMean = np.array(aurocIndividual).mean()
 
 	if pbar:
 		pbar.desc += f"{loss / len(dataloader):<12.3g}{aurocMean:<12.3g}"
 
 	if verbose:  # all classes
-		print ('AUROC mean ', aurocMean)
-		
-		for i in range (0, len(aurocIndividual)):
-			print (names[i], ' ', aurocIndividual[i])
+		class_and_auc = list(zip(names, aurocIndividual))
+		df = pd.DataFrame(class_and_auc, columns = ['Class', 'AUC']) 
+		print(df)
+
+	return (loss / len(dataloader)), aurocIndividual, aurocMean
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
@@ -352,5 +393,6 @@ if __name__ == '__main__':
 	opt.hyp = check_file(opt.hyp)  # check files
 	opt.img_size.extend([opt.img_size[-1]] * (2 - len(opt.img_size)))  # extend to 2 if 1
 	opt.save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok | opt.evolve)  # increment run
+	save_dir = Path(opt.save_dir)
 
 	train()
