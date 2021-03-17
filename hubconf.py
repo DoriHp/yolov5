@@ -12,6 +12,7 @@ import torch
 from models.yolo import Model
 from utils.general import set_logging
 from utils.google_utils import attempt_download
+from utils.torch_utils import select_device
 
 dependencies = ['torch', 'yaml']
 set_logging()
@@ -43,7 +44,8 @@ def create(name, pretrained, channels, classes, autoshape):
                 model.names = ckpt['model'].names  # set class names attribute
             if autoshape:
                 model = model.autoshape()  # for file/URI/PIL/cv2/np inputs and NMS
-        return model
+        device = select_device('0' if torch.cuda.is_available() else 'cpu')  # default to GPU if available
+        return model.to(device)
 
     except Exception as e:
         help_url = 'https://github.com/ultralytics/yolov5/issues/36'
@@ -51,7 +53,7 @@ def create(name, pretrained, channels, classes, autoshape):
         raise Exception(s) from e
 
 
-def yolov5s(pretrained=False, channels=3, classes=80, autoshape=True):
+def yolov5s(pretrained=True, channels=3, classes=80, autoshape=True):
     """YOLOv5-small model from https://github.com/ultralytics/yolov5
 
     Arguments:
@@ -65,7 +67,7 @@ def yolov5s(pretrained=False, channels=3, classes=80, autoshape=True):
     return create('yolov5s', pretrained, channels, classes, autoshape)
 
 
-def yolov5m(pretrained=False, channels=3, classes=80, autoshape=True):
+def yolov5m(pretrained=True, channels=3, classes=80, autoshape=True):
     """YOLOv5-medium model from https://github.com/ultralytics/yolov5
 
     Arguments:
@@ -79,7 +81,7 @@ def yolov5m(pretrained=False, channels=3, classes=80, autoshape=True):
     return create('yolov5m', pretrained, channels, classes, autoshape)
 
 
-def yolov5l(pretrained=False, channels=3, classes=80, autoshape=True):
+def yolov5l(pretrained=True, channels=3, classes=80, autoshape=True):
     """YOLOv5-large model from https://github.com/ultralytics/yolov5
 
     Arguments:
@@ -93,7 +95,7 @@ def yolov5l(pretrained=False, channels=3, classes=80, autoshape=True):
     return create('yolov5l', pretrained, channels, classes, autoshape)
 
 
-def yolov5x(pretrained=False, channels=3, classes=80, autoshape=True):
+def yolov5x(pretrained=True, channels=3, classes=80, autoshape=True):
     """YOLOv5-xlarge model from https://github.com/ultralytics/yolov5
 
     Arguments:
