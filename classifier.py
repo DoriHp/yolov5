@@ -18,81 +18,19 @@ from models.common import Classify
 from utils.general import set_logging, check_file, increment_path
 from utils.torch_utils import model_info, select_device
 
-import matplotlib.pyplot as plt
-import numpy as np
-import cv2
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-
 # Settings
 logger = logging.getLogger(__name__)
 set_logging()
 
+
 # Show images
 def imshow(img):
+    import matplotlib.pyplot as plt
+    import numpy as np
 
     plt.imshow(np.transpose((img / 2 + 0.5).numpy(), (1, 2, 0)))  # unnormalize
     plt.savefig('images.jpg')
 
-class CSVparser(data.Dataset):
-    def __init__(self, csv_path, transform=None):
-        self.df = pd.read_csv(csv_path)
-        self.transform = transform
-        self.class2index = {"normal": 0, "abnormal": 1}
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, index):
-        filepath = self.df["filepath"][index]
-        label = self.class2index[self.df["label"][index]]
-        image = cv2.imread(filepath)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if self.transform is not None:
-            image = self.transform(image=image)
-            return image['image'], label
-        else:
-            return image, label
-
-class DatasetLoader(data.DataLoader):
-
-    def __init__(self,
-                 root: str,
-                 image_size: int,
-                 train: bool,
-                 batch_size: int,
-                 mean: List[float] = [0.485, 0.456, 0.406],
-                 std: List[float] = [0.229, 0.224, 0.225],
-                 **kwargs):
-
-        if train:
-            transform = A.Compose([
-                A.HorizontalFlip(p=0.5),
-                A.CLAHE(),
-                A.InvertImg(),
-                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2),
-                A.Normalize(mean=mean, std=std),
-                ToTensorV2(),
-            ])
-        else:
-            transform = A.Compose([
-                A.Normalize(mean=mean, std=std),
-                ToTensorV2(),
-            ])
-
-        csv_path = os.path.join(root, "train.csv") if train else os.path.join(root, "valid.csv")
-
-        dataset = CSVparser(csv_path=csv_path, transform=transform)
-
-        sampler = None
-        if train and distributed_is_initialized():
-            sampler = data.distributed.DistributedSampler(dataset)
-
-        super(CustomDatasetLoader, self).__init__(dataset,
-                                                    batch_size=batch_size,
-                                                    shuffle=(sampler is None),
-                                                    sampler=sampler,
-                                                    **kwargs)
 
 def train():
     data, bs, epochs, nw = opt.data, opt.batch_size, opt.epochs, opt.workers
@@ -103,9 +41,21 @@ def train():
         torch.hub.download_url_to_file(f'https://github.com/ultralytics/yolov5/releases/download/v1.0/{data}.zip', f)
         os.system(f'unzip -q {f} -d ../ && rm {f}')  # unzip
 
+    # Transforms
+    trainform = T.Compose([T.RandomGrayscale(p=0.01),
+                           T.RandomHorizontalFlip(p=0.5),
+                           T.RandomAffine(degrees=1, translate=(.2, .2), scale=(1 / 1.5, 1.5),
+                                          shear=(-1, 1, -1, 1), fillcolor=(114, 114, 114)),
+                           # T.Resize([128, 128]),
+                           T.ToTensor(),
+                           T.Normalize((0.5, 0.5, 0.5), (0.25, 0.25, 0.25))])  # PILImage from [0, 1] to [-1, 1]
+    testform = T.Compose(trainform.transforms[-2:])
+
     # Dataloaders
-    trainloader = DatasetLoader(root="dataset", image_size=512, train=True, batch_size=bs, shuffle=True, num_workers=nw)
-    testloader = DatasetLoader(root="dataset", image_size=512, train=False, batch_size=bs, shuffle=False, num_workers=nw)
+    trainset = torchvision.datasets.ImageFolder(root=f'../{data}/train', transform=trainform)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=nw)
+    testset = torchvision.datasets.ImageFolder(root=f'../{data}/test', transform=testform)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=bs, shuffle=False, num_workers=nw)
     names = trainset.classes
     nc = len(names)
     print(f'Training {opt.model} on {data} dataset with {nc} classes...')

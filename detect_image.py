@@ -2,7 +2,7 @@
 # @Author: bao
 # @Date:   2021-02-26 08:42:08
 # @Last Modified by:   bao
-# @Last Modified time: 2021-03-04 11:10:15
+# @Last Modified time: 2021-03-11 17:35:52
 
 import argparse
 import time
@@ -13,6 +13,7 @@ import cv2
 import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
+from tqdm import tqdm
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
@@ -50,7 +51,7 @@ def gen_submission(root_folder):
 	root_folder = str(Path(root_folder))
 
 	# image_folder = str(Path(label_folder).parents[0])
-	image_folder = "F:/Dev/X-ray/VinBigData-dataset/test"
+	image_folder = "F:/Dev/X-ray/x-ray original/test"
 	# Open all files in label folder and convert to relative values
 
 	label_folder = root_folder + "/labels"
@@ -60,9 +61,10 @@ def gen_submission(root_folder):
 
 	submission_file = "submission_" + str(int(datetime.now().timestamp())) + ".csv"
 
+	print("Generating submission file")
 	with open(submission_file, "a+") as f:
 		f.write("image_id,PredictionString")
-		for image_name in image_list:
+		for image_name in tqdm(image_list, total=len(image_list), desc="Init empty detection for all images"):
 			if image_name.replace(".jpg", ".txt") not in label_list:
 				write_string = image_name.replace(".jpg", "") + ",14 1 0 0 1 1 "
 
@@ -74,7 +76,7 @@ def gen_submission(root_folder):
 				f.write(write_string)
 
 
-		for file in label_list:
+		for file in tqdm(label_list, total=len(label_list), desc="Converting detection to required format"):
 			image_name = file.replace(".txt", ".jpg")
 			img = cv2.imread(os.path.join(image_folder, image_name))
 
@@ -84,7 +86,7 @@ def gen_submission(root_folder):
 				for line in lines:
 					class_id, cen_x, cen_y, obj_width, obj_height, conf = line.strip().split()
 					xmin, ymin, xmax, ymax = convert2rect(img, (cen_x, cen_y, obj_width, obj_height))
-					write_string += "%s %.1f %d %d %d %d " %(class_id, float(conf), xmin, ymin, xmax, ymax)
+					write_string += "%s %.5f %d %d %d %d " %(class_id, float(conf), xmin, ymin, xmax, ymax)
 			
 			f.seek(0)    
 			data = f.read(100)
@@ -93,6 +95,7 @@ def gen_submission(root_folder):
 
 			f.write(write_string)
 		
+	print("Completed!")	
 
 def detect(save_img=False, save_empty_rs=False, save_csv=False):
 	source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
@@ -240,17 +243,20 @@ if __name__ == '__main__':
 	parser.add_argument('--project', default='runs/detect', help='save results to project/name')
 	parser.add_argument('--name', default='exp', help='save results to project/name')
 	parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+	parser.add_argument('--csv-only', action='store_true', help='Only run generating csv file, not detection')
 	opt = parser.parse_args()
 	print(opt)
 	check_requirements()
 
-	with torch.no_grad():
-		if opt.update:  # update all models (to fix SourceChangeWarning)
-			for opt.weights in ['yolov5s.pt', 'yolov5m.pt', 'yolov5l.pt', 'yolov5x.pt']:
-				detect()
-				strip_optimizer(opt.weights)
-		else:
-			print(opt.save_img)
-			detect(opt.save_img, save_csv=True)
+	if opt.csv_only:
+		gen_submission("F:/Dev/yolov5/runs/history/k-folds/exp2/")
+	else:
+		with torch.no_grad():
+			if opt.update:  # update all models (to fix SourceChangeWarning)
+				for opt.weights in ['yolov5s.pt', 'yolov5m.pt', 'yolov5l.pt', 'yolov5x.pt']:
+					detect()
+					strip_optimizer(opt.weights)
+			else:
+				print(opt.save_img)
+				detect(opt.save_img, save_csv=True)
 	
-	# gen_submission("F:/Dev/yolov5/runs/detect/exp2")

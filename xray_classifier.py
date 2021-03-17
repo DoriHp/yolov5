@@ -2,7 +2,7 @@
 # @Author: bao
 # @Date:   2021-03-08 08:40:46
 # @Last Modified by:   bao
-# @Last Modified time: 2021-03-10 10:11:55
+# @Last Modified time: 2021-03-17 13:13:08
 
 import argparse
 import logging
@@ -161,23 +161,6 @@ class DatasetLoader(data.DataLoader):
 											num_workers=num_workers,
 											**kwargs)
 
-class DenseNet121(nn.Module):
-	"""Model modified.
-	The architecture of our model is the same as standard DenseNet121
-	except the classifier layer which has an additional sigmoid function.
-	"""
-	def __init__(self, out_size):
-		super(DenseNet121, self).__init__()
-		self.densenet121 = torchvision.models.densenet121(pretrained=False)
-		num_ftrs = self.densenet121.classifier.in_features
-		self.densenet121.classifier = nn.Sequential(
-			nn.Linear(num_ftrs, out_size),
-			nn.Sigmoid()
-		)
-
-	def forward(self, x):
-		x = self.densenet121(x)
-		return x
 
 def train():
 	bs, epochs, nw = opt.batch_size, opt.epochs, opt.workers
@@ -225,7 +208,7 @@ def train():
 	scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
 
 	# Train
-	criterion = nn.BCEWithLogitsLoss(size_average = True)  # loss function
+	criterion = nn.BCEWithLogitsLoss(reduction="mean")  # loss function
 	# scaler = amp.GradScaler(enabled=cuda)
 
 	# Directories
@@ -263,7 +246,6 @@ def train():
 			mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
 			pbar.desc = f"{'%s/%s' % (epoch + 1, epochs):10s}{mem:10s}{mloss / (i + 1):<12.3g}"
 
-			writer.add_scalar("train/loss", mloss, epoch + 1)
 			# Test
 			if i == len(pbar) - 1:
 				val_loss, auc_all, auc_mean = test(model, testloader, names, criterion, pbar=pbar)  # test
@@ -281,7 +263,8 @@ def train():
 					torch.save(ckpt['model'], best)
 
 				torch.save(ckpt, last)
-
+				
+		writer.add_scalar("train/loss", mloss, epoch + 1)
 		# Test
 		scheduler.step()
 	
@@ -355,28 +338,31 @@ def test(model, dataloader, names, criterion=None, verbose=True, pbar=None):
 			if criterion:
 				loss += criterion(y, labels)
 				# print(loss)
+
 			gt = torch.cat((gt, labels), 0).to(device)
 
 	aurocIndividual = compute_auc(gt, pred, names)
 	aurocMean = np.array(aurocIndividual).mean()
 
+	# Update tqdm description
 	if pbar:
 		pbar.desc += f"{loss / len(dataloader):<12.3g}{aurocMean:<12.3g}"
 
 	if verbose:  # all classes
 		class_and_auc = list(zip(names, aurocIndividual))
 		df = pd.DataFrame(class_and_auc, columns = ['Class', 'AUC']) 
+		# Present AUC for each class
 		print(df)
 
 	return (loss / len(dataloader)), aurocIndividual, aurocMean
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--model', type=str, default='yolov5s', help='initial weights path')
+	parser.add_argument('--model', type=str, default='yolov5x', help='initial weights path')
 	parser.add_argument('--data', type=str, default='xray', help='cifar10, cifar100 or mnist')
 	parser.add_argument('--hyp', type=str, default='data/hyp.classifier.yaml', help='hyperparameters path')
 	parser.add_argument('--epochs', type=int, default=20)
-	parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')
+	parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')
 	parser.add_argument('--img-size', nargs='+', type=int, default=[320, 320], help='[train, test] image sizes')
 	parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
 	parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
