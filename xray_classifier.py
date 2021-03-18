@@ -2,7 +2,7 @@
 # @Author: bao
 # @Date:   2021-03-08 08:40:46
 # @Last Modified by:   bao
-# @Last Modified time: 2021-03-17 13:13:08
+# @Last Modified time: 2021-03-17 16:39:49
 
 import argparse
 import logging
@@ -26,7 +26,7 @@ import torchvision
 from torch.cuda import amp
 from tqdm import tqdm
 
-from models.common import MLClassify
+from models.common import Classify
 from utils.general import set_logging, check_file, increment_path
 from utils.torch_utils import model_info, select_device, is_parallel
 
@@ -114,6 +114,53 @@ class CheXpertDataSet(data.Dataset):
 		return len(self.image_paths)
 
 
+class PlanetDataset(data.Dataset):
+	def __init__(self, image_list_file, transform=None):
+		"""
+		image_list_file: path to the file containing images with corresponding labels.
+		transform: optional transform to be applied on a sample.
+		"""
+		image_paths = []
+		labels = []
+		names = ['haze', 'primary', 'agriculture', 'clear', 'water', 'habitation', 'road', 'cultivation', 'slash_burn', 'cloudy', 'partly_cloudy', 'conventional_mine', 'bare_ground', 'artisinal_mine', 'blooming', 'selective_logging', 'blow_down']
+
+		with open(image_list_file, "r") as f:
+			csvReader = csv.reader(f)
+			next(csvReader, None)
+			k=0
+			for line in csvReader:
+				k+=1
+				image_path = line[0]
+				contained_labels = line[1].strip().split(" ")
+				label = [0 for i in names]
+
+				for idx, i in enumerate(names):
+					if i in contained_labels:
+						label[idx] = 1
+				
+				image_paths.append(image_path)
+				labels.append(label)
+
+		self.image_paths = image_paths
+		self.labels = labels
+		self.transform = transform
+
+	def __getitem__(self, index):
+		"""Take the index of item and returns the image and its labels"""
+		
+		image_path = self.image_paths[index]
+		image = cv2.imread(image_path)
+		image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+		label = self.labels[index]
+		if self.transform is not None:
+			image = self.transform(image=image)
+			return image['image'], torch.FloatTensor(label)
+		return image, torch.FloatTensor(label)
+
+	def __len__(self):
+		return len(self.image_paths)		
+
+
 class DatasetLoader(data.DataLoader):
 
 	def __init__(self,
@@ -141,14 +188,11 @@ class DatasetLoader(data.DataLoader):
 				ToTensorV2(),
 			])
 
-		if train:
-			# Paths to the files with training, and validation sets.
-			# Each file contains pairs (path to image, output vector)
-			image_list_file = 'data/CheXpert-v1.0-small/test-train.csv'
-		else:
-			image_list_file = 'data/CheXpert-v1.0-small/test-valid.csv'
+		# image_list_file = 'data/CheXpert-v1.0-small/test-train.csv' if train else image_list_file = 'data/CheXpert-v1.0-small/test-valid.csv' 
+		image_list_file = "test-dataset/train.csv" if train else "test-dataset/valid.csv"
 
-		dataset = CheXpertDataSet(image_list_file=image_list_file, transform=transform)
+		# dataset = CheXpertDataSet(image_list_file=image_list_file, transform=transform)
+		dataset = PlanetDataset(image_list_file=image_list_file, transform=transform)
 
 		sampler = None
 		if train and distributed_is_initialized():
@@ -168,11 +212,15 @@ def train():
 	# Dataloaders
 	trainloader = DatasetLoader(train=True, batch_size=bs, num_workers=nw)
 	testloader = DatasetLoader(train=False, batch_size=bs, num_workers=nw)
-	names = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 
-			   'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 
-			   'Pleural Effusion', 'Pleural Other', 'Fracture', 'Support Devices']
+	# names = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 
+	# 		   'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 
+	# 		   'Pleural Effusion', 'Pleural Other', 'Fracture', 'Support Devices']
+
+	names = ['haze', 'primary', 'agriculture', 'clear', 'water', 'habitation', 'road', 'cultivation', 'slash_burn', 'cloudy', 'partly_cloudy', 'conventional_mine', 'bare_ground', 'artisinal_mine', 'blooming', 'selective_logging', 'blow_down']
+
 	nc = len(names)
-	print(f'Training {opt.model} on CheXpertDataSet dataset with {nc} classes...')
+	# print(f'Training {opt.model} on CheXpertDataSet dataset with {nc} classes...')
+	print(f'Training {opt.model} on Planet dataset with {nc} classes...')
 
 	# Show images
 	# images, labels = iter(trainloader).next()
@@ -185,7 +233,7 @@ def train():
 	model.model = model.model[:8]
 	m = model.model[-1]  # last layer
 	ch = m.conv.in_channels if hasattr(m, 'conv') else sum([x.in_channels for x in m.m])  # ch into module
-	c = MLClassify(ch, nc)  # Classify()
+	c = Classify(ch, nc)  # Classify()
 	c.i, c.f, c.type = m.i, m.f, 'models.common.Classify'  # index, from, type
 	model.model[-1] = c  # replace
 
@@ -358,12 +406,12 @@ def test(model, dataloader, names, criterion=None, verbose=True, pbar=None):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--model', type=str, default='yolov5x', help='initial weights path')
+	parser.add_argument('--model', type=str, default='yolov5s', help='initial weights path')
 	parser.add_argument('--data', type=str, default='xray', help='cifar10, cifar100 or mnist')
 	parser.add_argument('--hyp', type=str, default='data/hyp.classifier.yaml', help='hyperparameters path')
 	parser.add_argument('--epochs', type=int, default=20)
-	parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')
-	parser.add_argument('--img-size', nargs='+', type=int, default=[320, 320], help='[train, test] image sizes')
+	parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')
+	parser.add_argument('--img-size', nargs='+', type=int, default=[256, 256], help='[train, test] image sizes')
 	parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
 	parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
 	parser.add_argument('--cache-images', action='store_true', help='cache images for faster training')

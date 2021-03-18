@@ -309,24 +309,10 @@ class Classify(nn.Module):
         self.aap = nn.AdaptiveAvgPool2d(1)  # to x(b,c1,1,1)
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g)  # to x(b,c2,1,1)
         self.flat = nn.Flatten()
+        # self.linear = nn.Linear(c2, c2)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         z = torch.cat([self.aap(y) for y in (x if isinstance(x, list) else [x])], 1)  # cat if list
-        return self.flat(self.conv(z))  # flatten to x(b,c2)
-
-class MLClassify(nn.Module):
-    # Classification head, i.e. x(b,c1,20,20) to x(b,c2)
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1):  # ch_in, ch_out, kernel, stride, padding, groups
-        super(MLClassify, self).__init__()
-        self.aap = nn.AdaptiveAvgPool2d(1)  # to x(b,c1,1,1)
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g)  # to x(b,c2,1,1)
-        self.flat = nn.Flatten()
-        self.classifier = nn.Sequential(
-            nn.Linear(c2, c2),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        z = torch.cat([self.aap(y) for y in (x if isinstance(x, list) else [x])], 1)  # cat if list
-        f = self.flat(self.conv(z))  # flatten to x(b,c2)
-        return self.classifier(f)
+        # return self.flat(self.conv(z))  # flatten to x(b,c2)
+        return self.sigmoid(self.flat(self.conv(z)))
