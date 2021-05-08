@@ -2,7 +2,6 @@ import argparse
 import time
 from pathlib import Path
 
-import os
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
@@ -11,85 +10,19 @@ from numpy import random
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
 from utils.general import check_img_size, check_requirements, check_imshow, non_max_suppression, apply_classifier, \
-    scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path
-from utils.plots import plot_one_box
+    scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, save_one_box
+from utils.plots import colors, plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
-# Retrieve native display resolution
-from win32api import GetSystemMetrics
 
-# Convert values in 
-def convert2rect(image, bbox):
-    # Format: xmin, ymin, xmax, ymax
-    height, width, _ = image.shape
-    cen_x, cen_y, w, h = [float(i) for i in bbox]
-
-    # Re calculate bbox according to real image size 
-    cen_x *= width 
-    cen_y *= height
-    w     *= width
-    h     *= height
-
-    xmin = max(int(cen_x - w / 2), 0)
-    ymin = max(int(cen_y - h / 2), 0)
-    xmax = min(int(cen_x + w / 2), width)
-    ymax = min(int(cen_y + h / 2), height)
-
-    return xmin, ymin, xmax, ymax
-
-# Gen submission for X-ray competition
-def gen_submission(root_folder):
-
-    # image_folder = str(Path(label_folder).parents[0])
-    image_folder = root_folder
-    # Open all files in label folder and convert to relative values
-
-    label_folder = root_folder + "/labels"
-    label_list = [f for f in os.listdir(label_folder)]
-
-    image_list = [f for f in os.listdir(image_folder) if os.path.isfile(os.path.join(image_folder, f)) and f.endswith(".jpg")]
-
-    with open("submission.csv", "a+") as f:
-        f.write("image_id,PredictionString")
-        for image_name in image_list:
-            if image_name.replace(".jpg", ".txt") not in label_list:
-                write_string = image_name.replace(".jpg", "") + ",14 1 0 0 1 1 "
-
-                f.seek(0)
-                data = f.read(100)
-                if len(data) > 0:
-                    f.write("\n")        
-
-                f.write(write_string)
-
-
-        for file in label_list:
-            image_name = file.replace(".txt", ".jpg")
-            img = cv2.imread(os.path.join(image_folder, image_name))
-
-            write_string = image_name.replace(".jpg", "") + ","
-            with open(os.path.join(label_folder, file), "r") as _f:
-                lines =  _f.readlines()
-                for line in lines:
-                    class_id, cen_x, cen_y, obj_width, obj_height, conf = line.strip().split()
-                    xmin, ymin, xmax, ymax = convert2rect(img, (cen_x, cen_y, obj_width, obj_height))
-                    write_string += "%s %.1f %d %d %d %d " %(class_id, float(conf), xmin, ymin, xmax, ymax)
-            
-            f.seek(0)    
-            data = f.read(100)
-            if len(data) > 0:
-                f.write("\n")        
-
-            f.write(write_string)
-        
-
-def detect(save_img=False, save_csv=False):
+def detect(opt):
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
+    save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
-        ('rtsp://', 'rtmp://', 'http://'))
+        ('rtsp://', 'rtmp://', 'http://', 'https://'))
 
     # Directories
-    save_dir = Path(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))  # increment run
+    save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
     # Initialize
@@ -101,6 +34,7 @@ def detect(save_img=False, save_csv=False):
     model = attempt_load(weights, map_location=device)  # load FP32 model
     stride = int(model.stride.max())  # model stride
     imgsz = check_img_size(imgsz, s=stride)  # check img_size
+    names = model.module.names if hasattr(model, 'module') else model.names  # get class names
     if half:
         model.half()  # to FP16
 
@@ -117,12 +51,7 @@ def detect(save_img=False, save_csv=False):
         cudnn.benchmark = True  # set True to speed up constant image size inference
         dataset = LoadStreams(source, img_size=imgsz, stride=stride)
     else:
-        save_img = True
         dataset = LoadImages(source, img_size=imgsz, stride=stride)
-
-    # Get names and colors
-    names = model.module.names if hasattr(model, 'module') else model.names
-    colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
     # Run inference
     if device.type != 'cpu':
@@ -152,7 +81,7 @@ def detect(save_img=False, save_csv=False):
             if webcam:  # batch_size >= 1
                 p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
             else:
-                p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)
+                p, s, im0, frame = path, '', im0s.copy(), getattr(dataset, 'frame', 0)
 
             p = Path(p)  # to Path
             save_path = str(save_dir / p.name)  # img.jpg
@@ -176,49 +105,44 @@ def detect(save_img=False, save_csv=False):
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
-                    if save_img or view_img:  # Add bbox to image
-                        label = f'{names[int(cls)]} {conf:.2f}'
-                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
+                    if save_img or opt.save_crop or view_img:  # Add bbox to image
+                        c = int(cls)  # integer class
+                        label = None if opt.hide_labels else (names[c] if opt.hide_conf else f'{names[c]} {conf:.2f}')
+
+                        plot_one_box(xyxy, im0, label=label, color=colors(c, True), line_thickness=opt.line_thickness)
+                        if opt.save_crop:
+                            save_one_box(xyxy, im0s, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
 
             # Stream results
             if view_img:
-
-                display_img = im0.copy()
-                # If any demension of this image is higher than monitor's corresponding, resize if before displaying
-                if im0.shape[1] > GetSystemMetrics(0) or im0.shape[0] > GetSystemMetrics(1):
-                    display_img = cv2.resize(display_img, (GetSystemMetrics(0), GetSystemMetrics(1)))
-
-                cv2.imshow(str(p), display_img)
-                cv2.waitKey(0)  # 1 millisecond
-
-                cv2.destroyAllWindows()
+                cv2.imshow(str(p), im0)
+                cv2.waitKey(1)  # 1 millisecond
 
             # Save results (image with detections)
             if save_img:
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)
-                else:  # 'video'
+                else:  # 'video' or 'stream'
                     if vid_path != save_path:  # new video
                         vid_path = save_path
                         if isinstance(vid_writer, cv2.VideoWriter):
                             vid_writer.release()  # release previous video writer
-
-                        fourcc = 'mp4v'  # output video codec
-                        fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                        w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
+                        if vid_cap:  # video
+                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
+                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        else:  # stream
+                            fps, w, h = 30, im0.shape[1], im0.shape[0]
+                            save_path += '.mp4'
+                        vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer.write(im0)
 
     if save_txt or save_img:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         print(f"Results saved to {save_dir}{s}")
-
-    if save_csv:
-        gen_submission(save_dir)
 
     print(f'Done. ({time.time() - t0:.3f}s)')
 
@@ -232,9 +156,10 @@ if __name__ == '__main__':
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--view-img', action='store_true', help='display results')
-    parser.add_argument('--save-img', action='store_true', help='save result images')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
+    parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
+    parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
@@ -242,14 +167,17 @@ if __name__ == '__main__':
     parser.add_argument('--project', default='runs/detect', help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+    parser.add_argument('--line-thickness', default=3, type=int, help='bounding box thickness (pixels)')
+    parser.add_argument('--hide-labels', default=False, action='store_true', help='hide labels')
+    parser.add_argument('--hide-conf', default=False, action='store_true', help='hide confidences')
     opt = parser.parse_args()
     print(opt)
-    check_requirements()
+    check_requirements(exclude=('tensorboard', 'pycocotools', 'thop'))
 
     with torch.no_grad():
         if opt.update:  # update all models (to fix SourceChangeWarning)
             for opt.weights in ['yolov5s.pt', 'yolov5m.pt', 'yolov5l.pt', 'yolov5x.pt']:
-                detect()
+                detect(opt=opt)
                 strip_optimizer(opt.weights)
         else:
-            detect(opt.save_img, save_csv=True)
+            detect(opt=opt)
