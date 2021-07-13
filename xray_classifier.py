@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # @Author: bao
 # @Date:   2021-03-08 08:40:46
-# @Last Modified by:   bao
-# @Last Modified time: 2021-03-11 15:57:49
+# @Last Modified by:   Bao
 
 import argparse
 import logging
@@ -26,10 +25,10 @@ import torchvision
 from torch.cuda import amp
 from tqdm import tqdm
 
-from models.common import MLClassify
+from models.common import Classify
 from utils.general import set_logging, check_file, increment_path
 from utils.torch_utils import model_info, select_device, is_parallel
-from torch.nn.parallel import DistributedDataParallel as DDP
+
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -114,6 +113,51 @@ class CheXpertDataSet(data.Dataset):
 	def __len__(self):
 		return len(self.image_paths)
 
+class PlanetDataset(data.Dataset):
+	def __init__(self, image_list_file, transform=None):
+		"""
+		image_list_file: path to the file containing images with corresponding labels.
+		transform: optional transform to be applied on a sample.
+		"""
+		image_paths = []
+		labels = []
+		names = ['haze', 'primary', 'agriculture', 'clear', 'water', 'habitation', 'road', 'cultivation', 'slash_burn', 'cloudy', 'partly_cloudy', 'conventional_mine', 'bare_ground', 'artisinal_mine', 'blooming', 'selective_logging', 'blow_down']
+
+		with open(image_list_file, "r") as f:
+			csvReader = csv.reader(f)
+			next(csvReader, None)
+			k=0
+			for line in csvReader:
+				k+=1
+				image_path = line[0]
+				contained_labels = line[1].strip().split(" ")
+				label = [0 for i in names]
+
+				for idx, i in enumerate(names):
+					if i in contained_labels:
+						label[idx] = 1
+				
+				image_paths.append(image_path)
+				labels.append(label)
+
+		self.image_paths = image_paths
+		self.labels = labels
+		self.transform = transform
+
+	def __getitem__(self, index):
+		"""Take the index of item and returns the image and its labels"""
+		
+		image_path = self.image_paths[index]
+		image = cv2.imread(image_path)
+		image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+		label = self.labels[index]
+		if self.transform is not None:
+			image = self.transform(image=image)
+			return image['image'], torch.FloatTensor(label)
+		return image, torch.FloatTensor(label)
+
+	def __len__(self):
+		return len(self.image_paths)		
 
 class DatasetLoader(data.DataLoader):
 
@@ -150,7 +194,10 @@ class DatasetLoader(data.DataLoader):
 		else:
 			image_list_file = 'data/CheXpert-v1.0-small/valid.csv'
 
-		dataset = CheXpertDataSet(image_list_file=image_list_file, transform=transform)
+		image_list_file = "test-dataset/train.csv" if train else "test-dataset/valid.csv"
+
+		# dataset = CheXpertDataSet(image_list_file=image_list_file, transform=transform)
+		dataset = PlanetDataset(image_list_file=image_list_file, transform=transform)
 
 		sampler = None
 		if train and distributed_is_initialized():
@@ -187,11 +234,17 @@ def train():
 	# Dataloaders
 	trainloader = DatasetLoader(train=True, batch_size=bs, num_workers=nw)
 	testloader = DatasetLoader(train=False, batch_size=bs, num_workers=nw)
-	names = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 
-			   'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 
-			   'Pleural Effusion', 'Pleural Other', 'Fracture', 'Support Devices']
+
+	# names = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 
+	# 		   'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 
+	# 		   'Pleural Effusion', 'Pleural Other', 'Fracture', 'Support Devices']
+
+	names = ['haze', 'primary', 'agriculture', 'clear', 'water', 'habitation', 'road', 'cultivation', 'slash_burn', 'cloudy', 'partly_cloudy', 'conventional_mine', 'bare_ground', 'artisinal_mine', 'blooming', 'selective_logging', 'blow_down']
+
 	nc = len(names)
-	print(f'Training {opt.model} on CheXpertDataSet dataset with {nc} classes...')
+	# print(f'Training {opt.model} on CheXpertDataSet dataset with {nc} classes...')
+	print(f'Training {opt.model} on Planet dataset with {nc} classes...')
+
 
 	# Show images
 	# images, labels = iter(trainloader).next()
@@ -204,15 +257,16 @@ def train():
 	model.model = model.model[:8]
 	m = model.model[-1]  # last layer
 	ch = m.conv.in_channels if hasattr(m, 'conv') else sum([x.in_channels for x in m.m])  # ch into module
-	c = MLClassify(ch, nc)  # Classify()
+
+	c = Classify(ch, nc)  # Classify()
 	c.i, c.f, c.type = m.i, m.f, 'models.common.Classify'  # index, from, type
 	model.model[-1] = c  # replace
 
 	# x = torch.randn(1, 3, 320, 320).to(device)
 
 	model_info(model)
-	# model = model.to(device)
-	model = torch.nn.DataParallel(model.cuda(), device_ids=[0,1])
+	model = model.to(device)
+
 	# print(model, model(x))
 
 	# Optimizer
@@ -267,6 +321,7 @@ def train():
 			pbar.desc = f"{'%s/%s' % (epoch + 1, epochs):10s}{mem:10s}{mloss / (i + 1):<12.3g}"
 
 			writer.add_scalar("train/loss", mloss, epoch + 1)
+
 			# Test
 			if i == len(pbar) - 1:
 				val_loss, auc_all, auc_mean = test(model, testloader, names, criterion, pbar=pbar)  # test
@@ -284,7 +339,8 @@ def train():
 					torch.save(ckpt['model'], best)
 
 				torch.save(ckpt, last)
-
+				
+		writer.add_scalar("train/loss", mloss, epoch + 1)
 		# Test
 		scheduler.step()
 	
@@ -378,17 +434,17 @@ def test(model, dataloader, names, criterion=None, verbose=True, pbar=None):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--model', type=str, default='yolov5x', help='initial weights path')
+	parser.add_argument('--model', type=str, default='yolov5s', help='initial weights path')
 	parser.add_argument('--data', type=str, default='xray', help='cifar10, cifar100 or mnist')
 	parser.add_argument('--hyp', type=str, default='data/hyp.classifier.yaml', help='hyperparameters path')
-	parser.add_argument('--epochs', type=int, default=5)
-	parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs')
-	parser.add_argument('--img-size', nargs='+', type=int, default=[320, 320], help='[train, test] image sizes')
+	parser.add_argument('--epochs', type=int, default=20)
+	parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')
+	parser.add_argument('--img-size', nargs='+', type=int, default=[256, 256], help='[train, test] image sizes')
 	parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
 	parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
 	parser.add_argument('--cache-images', action='store_true', help='cache images for faster training')
 	parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-	parser.add_argument('--workers', type=int, default=6, help='maximum number of dataloader workers')
+	parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
 	parser.add_argument('--project', default='runs/train', help='save to project/name')
 	parser.add_argument('--name', default='classifier', help='save to project/name')
 	parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')

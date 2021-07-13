@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # @Author: bao
 # @Date:   2021-02-26 08:42:08
-# @Last Modified by:   bao
-# @Last Modified time: 2021-03-29 13:29:11
+# @Last Modified by:   Bao
 
 import argparse
 import time
@@ -28,11 +27,15 @@ if os.name != "posix":
 	from win32api import GetSystemMetrics
 
 from datetime import datetime
+from utils.preprocess import *
+
+# Retrieve native display resolution
+from win32api import GetSystemMetrics
 
 # Convert values in 
-def convert2rect(image_shape, bbox):
+def convert2rect(image, bbox):
 	# Format: xmin, ymin, xmax, ymax
-	(width, height) = image_shape
+	height, width, _ = image.shape
 	cen_x, cen_y, w, h = [float(i) for i in bbox]
 
 	# Re calculate bbox according to real image size 
@@ -70,6 +73,8 @@ def gen_submission(root_folder):
 	label_folder = root_folder + "/labels"
 	label_list = [f for f in os.listdir(label_folder)]
 
+	image_list = [f for f in os.listdir(image_folder) if os.path.isfile(os.path.join(image_folder, f)) and f.endswith(".jpg")]
+
 	submission_file = "submission_" + str(int(datetime.now().timestamp())) + ".csv"
 
 	print("Generating submission file")
@@ -85,18 +90,18 @@ def gen_submission(root_folder):
 					f.write("\n")        
 
 				f.write(write_string)
-
-
 		for file in tqdm(label_list, total=len(label_list), desc="Converl all detections to required format"):
 			image_name = file.replace(".txt", "")
 			image_shape = shapes[image_name]
 
 			write_string = image_name + ","
+
 			with open(os.path.join(label_folder, file), "r") as _f:
 				lines =  _f.readlines()
 				for line in lines:
 					class_id, cen_x, cen_y, obj_width, obj_height, conf = line.strip().split()
 					xmin, ymin, xmax, ymax = convert2rect(image_shape, (cen_x, cen_y, obj_width, obj_height))
+
 					write_string += "%s %.5f %d %d %d %d " %(class_id, float(conf), xmin, ymin, xmax, ymax)
 			
 			f.seek(0)    
@@ -152,7 +157,9 @@ def detect(save_img=False, save_empty_rs=False, save_csv=False):
 		pred = model(img, augment=opt.augment)[0]
 
 		# Apply NMS
+
 		pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms, multi_label=True)
+
 		t2 = time_synchronized()
 
 		p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)

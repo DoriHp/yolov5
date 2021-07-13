@@ -552,6 +552,18 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         if nl:
             labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 
+            # Brightness
+            random_brightness(img, brightness_limit=hyp['brightness'])
+
+            # Contrast
+            random_contrast(img, contrast_limit=hyp['contrast'])
+
+            # Gaussian blur
+            gaussian_blur(img, ksize=hyp['blur'])
+
+            # Apply cutouts
+            # if random.random() < 0.9:
+            #     labels = cutout(img, labels)
         if self.augment:
             # Albumentations
             img, labels = self.albumentations(img, labels)
@@ -636,6 +648,92 @@ def load_image(self, index):
         return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
 
 
+<<<<<<< HEAD
+def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5):
+    r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain] + 1  # random gains
+    hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+    dtype = img.dtype  # uint8
+
+    x = np.arange(0, 256, dtype=np.int16)
+    lut_hue = ((x * r[0]) % 180).astype(dtype)
+    lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+    lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+
+    img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
+    cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
+
+
+def hist_equalize(img, clahe=True, bgr=False):
+    # Equalize histogram on BGR image 'img' with img.shape(n,m,3) and range 0-255
+    yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV if bgr else cv2.COLOR_RGB2YUV)
+    if clahe:
+        c = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        yuv[:, :, 0] = c.apply(yuv[:, :, 0])
+    else:
+        yuv[:, :, 0] = cv2.equalizeHist(yuv[:, :, 0])  # equalize Y channel histogram
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR if bgr else cv2.COLOR_YUV2RGB)  # convert YUV image to RGB
+
+def random_brightness(img, brightness_limit=0.2):
+    """Adjust brightness of an Image.
+    Args:
+        img (numpy ndarray): numpy ndarray to be adjusted.
+        brightness_limit (float):  How much to adjust the brightness. Can be
+            any non negative number. 
+    Returns:
+        numpy ndarray: Brightness adjusted image.
+    """
+    brightness_factor = random.uniform(1 - brightness_limit, 1 + brightness_limit)
+
+    table = np.array([i * brightness_factor
+                      for i in range(0, 256)]).clip(0, 255).astype('uint8')
+    # same thing but a bit slower
+    # cv2.convertScaleAbs(img, alpha=brightness_factor, beta=0)
+    if img.shape[2] == 1:
+        return cv2.LUT(img, table)[:, :, np.newaxis]
+    else:
+        return cv2.LUT(img, table)    
+
+def random_contrast(img, contrast_limit=0.2):
+    """Adjust contrast of an image.
+    Args:
+        img (numpy ndarray): numpy ndarray to be adjusted.
+        contrast_limit (float): How much to adjust the contrast. Can be any
+            non negative number. 
+    Returns:
+        numpy ndarray: Contrast adjusted image.
+    """
+    # much faster to use the LUT construction than anything else I've tried
+    # it's because you have to change dtypes multiple times
+    contrast_factor = random.uniform(1 - contrast_limit, 1 + contrast_limit)
+
+    table = np.array([(i - 74) * contrast_factor + 74
+                      for i in range(0, 256)]).clip(0, 255).astype('uint8')
+    # enhancer = ImageEnhance.Contrast(img)
+    # img = enhancer.enhance(contrast_factor)
+    if img.shape[2] == 1:
+        return cv2.LUT(img, table)[:, :, np.newaxis]
+    else:
+        return cv2.LUT(img, table)
+
+def gaussian_blur(img, ksize=3):
+    """Apply gaussian blur to image
+    Args:
+        img (numpy ndarray): numpy ndarray to be ajusted
+        kernel_size (int): the size of kernel used to perform gaussian blur adjust, must be odd.
+            Larger value makes the image becomes more blured
+    Returns:
+        numpy ndarray: blured adjusted image
+    """
+    assert (ksize % 2) == 1, "kernel size used for gaussian blur must be odd"
+
+    if ksize == 1:
+        return img
+
+    return cv2.GaussianBlur(img, (ksize, ksize), 0)
+
+
+=======
+>>>>>>> d204a61834d0f6b2e73c1f43facf32fbadb6b284
 def load_mosaic(self, index):
     # loads images in a 4-mosaic
 

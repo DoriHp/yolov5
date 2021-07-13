@@ -24,9 +24,9 @@ iou_t: 0.2
 anchor_t: 2.91
 anchors: 3.63
 fl_gamma: 0.0
-hsv_h: 0.0138
-hsv_s: 0.664
-hsv_v: 0.464
+hsv_h: 0.0
+hsv_s: 0.0
+hsv_v: 0.0
 degrees: 0.373
 translate: 0.245
 scale: 0.898
