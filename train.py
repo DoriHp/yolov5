@@ -589,13 +589,9 @@ def main(opt):
                 'flipud': (1, 0.0, 1.0),  # image flip up-down (probability)
                 'fliplr': (0, 0.0, 1.0),  # image flip left-right (probability)
                 'mosaic': (1, 0.0, 1.0),  # image mixup (probability)
-<<<<<<< HEAD
                 'mixup': (1, 0.0, 1.0),
                 'brightness': (1, 0.0, 0.1),
-                'contrast': (1, 0.0, 0.1)}  # image mixup (probability)
-
-        assert opt.local_rank == -1, 'DDP mode not implemented for --evolve'
-=======
+                'contrast': (1, 0.0, 0.1),  # image mixup (probability)
                 'mixup': (1, 0.0, 1.0),  # image mixup (probability)
                 'copy_paste': (1, 0.0, 1.0)}  # segment copy-paste (probability)
 
@@ -604,7 +600,7 @@ def main(opt):
             if 'anchors' not in hyp:  # anchors commented in hyp.yaml
                 hyp['anchors'] = 3
         assert LOCAL_RANK == -1, 'DDP mode not implemented for --evolve'
->>>>>>> d204a61834d0f6b2e73c1f43facf32fbadb6b284
+
         opt.notest, opt.nosave = True, True  # only test/save final epoch
         # ei = [isinstance(x, (int, float)) for x in hyp.values()]  # evolvable indices
         yaml_file = Path(opt.save_dir) / 'hyp_evolved.yaml'  # save best result here
