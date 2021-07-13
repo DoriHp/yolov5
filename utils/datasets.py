@@ -552,7 +552,6 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         if nl:
             labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 
-<<<<<<< HEAD
             # Brightness
             random_brightness(img, brightness_limit=hyp['brightness'])
 
@@ -565,11 +564,9 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             # Apply cutouts
             # if random.random() < 0.9:
             #     labels = cutout(img, labels)
-=======
         if self.augment:
             # Albumentations
             img, labels = self.albumentations(img, labels)
->>>>>>> d204a61834d0f6b2e73c1f43facf32fbadb6b284
 
             # HSV color-space
             augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])

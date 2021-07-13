@@ -10,14 +10,8 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
-<<<<<<< HEAD
-
-sys.path.append(Path(__file__).parent.parent.absolute().__str__())  # to run '$ python *.py' files in subdirectories
-logger = logging.getLogger(__name__)
-=======
 FILE = Path(__file__).absolute()
 sys.path.append(FILE.parents[1].as_posix())  # add yolov5/ to path
->>>>>>> d204a61834d0f6b2e73c1f43facf32fbadb6b284
 
 from models.common import *
 from models.experimental import *
