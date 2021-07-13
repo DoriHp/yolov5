@@ -1,9 +1,9 @@
 # YOLOv5 common modules
 
-import math
 from copy import copy
 from pathlib import Path
 
+import math
 import numpy as np
 import pandas as pd
 import requests
@@ -12,7 +12,7 @@ import torch.nn as nn
 from PIL import Image
 from torch.cuda import amp
 
-from utils.datasets import letterbox
+from utils.datasets import exif_transpose, letterbox
 from utils.general import non_max_suppression, make_divisible, scale_coords, increment_path, xyxy2xywh, save_one_box
 from utils.plots import colors, plot_one_box
 from utils.torch_utils import time_synchronized
@@ -77,18 +77,8 @@ class TransformerBlock(nn.Module):
         if self.conv is not None:
             x = self.conv(x)
         b, _, w, h = x.shape
-        p = x.flatten(2)
-        p = p.unsqueeze(0)
-        p = p.transpose(0, 3)
-        p = p.squeeze(3)
-        e = self.linear(p)
-        x = p + e
-
-        x = self.tr(x)
-        x = x.unsqueeze(3)
-        x = x.transpose(0, 3)
-        x = x.reshape(b, self.c2, w, h)
-        return x
+        p = x.flatten(2).unsqueeze(0).transpose(0, 3).squeeze(3)
+        return self.tr(p + self.linear(p)).unsqueeze(3).transpose(0, 3).reshape(b, self.c2, w, h)
 
 
 class Bottleneck(nn.Module):
@@ -215,26 +205,28 @@ class NMS(nn.Module):
     conf = 0.25  # confidence threshold
     iou = 0.45  # IoU threshold
     classes = None  # (optional list) filter by class
+    max_det = 1000  # maximum number of detections per image
 
     def __init__(self):
         super(NMS, self).__init__()
 
     def forward(self, x):
-        return non_max_suppression(x[0], conf_thres=self.conf, iou_thres=self.iou, classes=self.classes)
+        return non_max_suppression(x[0], self.conf, iou_thres=self.iou, classes=self.classes, max_det=self.max_det)
 
 
-class autoShape(nn.Module):
-    # input-robust model wrapper for passing cv2/np/PIL/torch inputs. Includes preprocessing, inference and NMS
+class AutoShape(nn.Module):
+    # YOLOv5 input-robust model wrapper for passing cv2/np/PIL/torch inputs. Includes preprocessing, inference and NMS
     conf = 0.25  # NMS confidence threshold
     iou = 0.45  # NMS IoU threshold
     classes = None  # (optional list) filter by class
+    max_det = 1000  # maximum number of detections per image
 
     def __init__(self, model):
-        super(autoShape, self).__init__()
+        super(AutoShape, self).__init__()
         self.model = model.eval()
 
     def autoshape(self):
-        print('autoShape already enabled, skipping... ')  # model already converted to model.autoshape()
+        print('AutoShape already enabled, skipping... ')  # model already converted to model.autoshape()
         return self
 
     @torch.no_grad()
@@ -260,13 +252,14 @@ class autoShape(nn.Module):
         for i, im in enumerate(imgs):
             f = f'image{i}'  # filename
             if isinstance(im, str):  # filename or uri
-                im, f = np.asarray(Image.open(requests.get(im, stream=True).raw if im.startswith('http') else im)), im
+                im, f = Image.open(requests.get(im, stream=True).raw if im.startswith('http') else im), im
+                im = np.asarray(exif_transpose(im))
             elif isinstance(im, Image.Image):  # PIL Image
-                im, f = np.asarray(im), getattr(im, 'filename', f) or f
+                im, f = np.asarray(exif_transpose(im)), getattr(im, 'filename', f) or f
             files.append(Path(f).with_suffix('.jpg').name)
             if im.shape[0] < 5:  # image in CHW
                 im = im.transpose((1, 2, 0))  # reverse dataloader .transpose(2, 0, 1)
-            im = im[:, :, :3] if im.ndim == 3 else np.tile(im[:, :, None], 3)  # enforce 3ch input
+            im = im[..., :3] if im.ndim == 3 else np.tile(im[..., None], 3)  # enforce 3ch input
             s = im.shape[:2]  # HWC
             shape0.append(s)  # image shape
             g = (size / max(s))  # gain
@@ -285,7 +278,7 @@ class autoShape(nn.Module):
             t.append(time_synchronized())
 
             # Post-process
-            y = non_max_suppression(y, conf_thres=self.conf, iou_thres=self.iou, classes=self.classes)  # NMS
+            y = non_max_suppression(y, self.conf, iou_thres=self.iou, classes=self.classes, max_det=self.max_det)  # NMS
             for i in range(n):
                 scale_coords(shape1, y[i][:, :4], shape0[i])
 
@@ -294,7 +287,7 @@ class autoShape(nn.Module):
 
 
 class Detections:
-    # detections class for YOLOv5 inference results
+    # YOLOv5 detections class for inference results
     def __init__(self, imgs, pred, files, times=None, names=None, shape=None):
         super(Detections, self).__init__()
         d = pred[0].device  # device
@@ -314,17 +307,19 @@ class Detections:
     def display(self, pprint=False, show=False, save=False, crop=False, render=False, save_dir=Path('')):
         for i, (im, pred) in enumerate(zip(self.imgs, self.pred)):
             str = f'image {i + 1}/{len(self.pred)}: {im.shape[0]}x{im.shape[1]} '
-            if pred is not None:
+            if pred.shape[0]:
                 for c in pred[:, -1].unique():
                     n = (pred[:, -1] == c).sum()  # detections per class
                     str += f"{n} {self.names[int(c)]}{'s' * (n > 1)}, "  # add to string
                 if show or save or render or crop:
-                    for *box, conf, cls in pred:  # xyxy, confidence, class
+                    for *box, conf, cls in reversed(pred):  # xyxy, confidence, class
                         label = f'{self.names[int(cls)]} {conf:.2f}'
                         if crop:
                             save_one_box(box, im, file=save_dir / 'crops' / self.names[int(cls)] / self.files[i])
                         else:  # all others
                             plot_one_box(box, im, label=label, color=colors(cls))
+            else:
+                str += '(no detections)'
 
             im = Image.fromarray(im.astype(np.uint8)) if isinstance(im, np.ndarray) else im  # from np
             if pprint:

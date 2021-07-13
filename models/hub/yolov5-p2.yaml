@@ -1,9 +1,12 @@
+<<<<<<< HEAD
 # parameters
 nc: 14  # number of classes
+=======
+# Parameters
+nc: 80  # number of classes
+>>>>>>> d204a61834d0f6b2e73c1f43facf32fbadb6b284
 depth_multiple: 1.0  # model depth multiple
 width_multiple: 1.0  # layer channel multiple
-
-# anchors
 anchors: 3
 
 # YOLOv5 backbone
