@@ -553,13 +553,13 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 
             # Brightness
-            random_brightness(img, brightness_limit=hyp['brightness'])
+            # random_brightness(img, brightness_limit=hyp['brightness'])
 
             # Contrast
-            random_contrast(img, contrast_limit=hyp['contrast'])
+            # random_contrast(img, contrast_limit=hyp['contrast'])
 
             # Gaussian blur
-            gaussian_blur(img, ksize=hyp['blur'])
+            # gaussian_blur(img, ksize=hyp['blur'])
 
             # Apply cutouts
             # if random.random() < 0.9:
@@ -648,7 +648,6 @@ def load_image(self, index):
         return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
 
 
-<<<<<<< HEAD
 def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5):
     r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain] + 1  # random gains
     hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
@@ -731,9 +730,6 @@ def gaussian_blur(img, ksize=3):
 
     return cv2.GaussianBlur(img, (ksize, ksize), 0)
 
-
-=======
->>>>>>> d204a61834d0f6b2e73c1f43facf32fbadb6b284
 def load_mosaic(self, index):
     # loads images in a 4-mosaic
 

@@ -58,12 +58,12 @@ def pt2weight(weights):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='weights/yolov5s-1l.pt', help='model.pt path')
-    parser.add_argument('--yaml', type=str, default='weights/yolov5s-1l.yaml', help='model.yaml path')
+    parser.add_argument('--weights', type=str, default='weights/yolov5s.pt', help='model.pt path')
+    parser.add_argument('--yaml', type=str, default='weights/yolov5s.yaml', help='model.yaml path')
     parser.add_argument('--net_w', type=int, default=320, help='net width (pixels)')
     parser.add_argument('--net_h', type=int, default=320, help='net height (pixels)')
     parser.add_argument('--batch', type=int, default=1, help='inference batch size')
-    parser.add_argument('--classes', type=int,default=2, help='filter by class: --class 0, or --class 0 2 3')
+    parser.add_argument('--classes', type=int,default=3, help='filter by class: --class 0, or --class 0 2 3')
     opt = parser.parse_args()
     print(opt)
     attempt_download(opt.weights)
